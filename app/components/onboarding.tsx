@@ -5,7 +5,7 @@ import { isProd } from '@/lib/app-env';
 
 interface OnboardingProps {
   onError: (message: string) => void;
-  onSuccess: (mode: 'login' | 'register') => void;
+  onSuccess: () => void;
   error?: string;
 }
 
@@ -43,17 +43,17 @@ function GoogleIcon() {
 }
 
 export default function Onboarding({ onError, onSuccess, error }: OnboardingProps) {
-  const [loading, setLoading] = useState<'login' | 'register' | null>(null);
+  const [loading, setLoading] = useState(false);
 
   // In dev we bypass auth and simulate success so the UI can be explored
   // without Google credentials. In prod we kick off the real Google OAuth flow.
-  async function handleGoogle(mode: 'login' | 'register') {
-    setLoading(mode);
+  async function handleGoogle() {
+    setLoading(true);
     onError('');
 
     if (!isProd) {
       setTimeout(() => {
-        onSuccess(mode);
+        onSuccess();
       }, 700);
       return;
     }
@@ -63,7 +63,7 @@ export default function Onboarding({ onError, onSuccess, error }: OnboardingProp
       window.location.href = url;
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Algo salió mal. Intenta de nuevo.');
-      setLoading(null);
+      setLoading(false);
     }
   }
 
@@ -120,7 +120,7 @@ export default function Onboarding({ onError, onSuccess, error }: OnboardingProp
           <div>
             <h1 className="auth-title">Te damos la bienvenida</h1>
             <p className="auth-sub">
-              Inicia sesión o crea tu cuenta para conectar WhatsApp con tu organización.
+              Inicia sesión con Google para conectar WhatsApp con tu organización.
             </p>
           </div>
 
@@ -132,27 +132,16 @@ export default function Onboarding({ onError, onSuccess, error }: OnboardingProp
             )}
             <button
               className="secondary block"
-              onClick={() => handleGoogle('login')}
-              disabled={loading !== null}
+              onClick={handleGoogle}
+              disabled={loading}
             >
               <GoogleIcon />
-              {loading === 'login' ? 'Conectando…' : 'Iniciar sesión con Google'}
-            </button>
-
-            <div className="divider">o</div>
-
-            <button
-              className="block"
-              onClick={() => handleGoogle('register')}
-              disabled={loading !== null}
-            >
-              {loading === 'register' ? 'Creando tu cuenta…' : 'Crear una cuenta'}
+              {loading ? 'Conectando…' : 'Continuar con Google'}
             </button>
           </div>
 
           <p className="help-note">
-            Crear tu cuenta es gratis y solo te toma un momento. También puedes entrar con Google si
-            prefieres no recordar otra contraseña.
+            Usamos Google para validar tu identidad y mantener tu acceso simple.
           </p>
         </div>
       </main>
