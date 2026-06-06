@@ -22,9 +22,20 @@ export function verifyKapsoSignature(rawBody: string, signatureHex: string | nul
   }
 }
 
+export interface KapsoMedia {
+  url: string;
+  filename: string;
+  contentType: string;
+  byteSize?: number;
+  kind: 'image' | 'document' | 'audio' | 'video' | 'sticker' | 'other';
+}
+
 export interface KapsoInboundMessage {
   from: string;
-  text: string;
+  text?: string;
+  caption?: string;
+  transcript?: string;
+  media?: KapsoMedia;
   messageId?: string;
   phoneNumberId?: string;
   conversationId?: string;
@@ -34,8 +45,25 @@ function pickString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function pickNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function mediaKindFromType(type: string | undefined): KapsoMedia['kind'] {
+  switch (type) {
+    case 'image':
+    case 'document':
+    case 'audio':
+    case 'video':
+    case 'sticker':
+      return type;
+    default:
+      return 'other';
+  }
 }
 
 export function parseKapsoInbound(payload: unknown): KapsoInboundMessage {
@@ -45,6 +73,10 @@ export function parseKapsoInbound(payload: unknown): KapsoInboundMessage {
 
   const message = asObject(body.message);
   const conversation = asObject(body.conversation);
+  const kapso = asObject(message.kapso);
+  const mediaData = asObject(kapso.media_data);
+  const messageTypeData = asObject(kapso.message_type_data);
+  const transcriptObj = asObject(kapso.transcript);
   const textObj = asObject(message.text);
 
   const from =
@@ -61,16 +93,59 @@ export function parseKapsoInbound(payload: unknown): KapsoInboundMessage {
     pickString(body.text) ??
     pickString(body.body);
 
+  const caption = pickString(messageTypeData.caption);
+  const transcript = pickString(transcriptObj.text);
+
+  const messageType = pickString(message.type);
+  const hasMedia = kapso.has_media === true || Boolean(mediaData.url);
+
+  let media: KapsoMedia | undefined;
+  if (hasMedia) {
+    const url = pickString(mediaData.url) ?? pickString(kapso.media_url);
+    const filename = pickString(mediaData.filename) ?? `${messageType ?? 'file'}.bin`;
+    const contentType = pickString(mediaData.content_type) ?? 'application/octet-stream';
+    if (url) {
+      media = {
+        url,
+        filename,
+        contentType,
+        byteSize: pickNumber(mediaData.byte_size),
+        kind: mediaKindFromType(messageType),
+      };
+    }
+  }
+
   if (!from) throw new Error('Kapso webhook missing sender phone number');
-  if (!text) throw new Error('Kapso webhook missing message text');
+  if (!text && !media) throw new Error('Kapso webhook missing message text and media');
 
   return {
     from,
     text,
+    caption,
+    transcript,
+    media,
     messageId: pickString(message.id) ?? pickString(body.messageId) ?? pickString(body.message_id),
     phoneNumberId: pickString(body.phone_number_id) ?? pickString(conversation.phone_number_id),
     conversationId: pickString(conversation.id),
   };
+}
+
+export async function downloadKapsoMedia(url: string): Promise<{ buffer: Buffer; contentType: string }> {
+  const apiKey = process.env.KAPSO_API_KEY;
+  if (!apiKey) throw new Error('Missing KAPSO_API_KEY');
+
+  const res = await fetch(url, {
+    headers: { 'X-API-Key': apiKey },
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Kapso media download failed (${res.status}): ${body.slice(0, 500)}`);
+  }
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+  return { buffer, contentType };
 }
 
 export function isInboundMessageEvent(req: { headers: Headers }, payload: unknown): boolean {

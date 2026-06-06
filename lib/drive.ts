@@ -77,6 +77,29 @@ export async function ensureAcumenFolders(drive: drive_v3.Drive): Promise<Acumen
   return [{ id, name: ACUMEN_FOLDER_NAME }];
 }
 
+/**
+ * List the direct child folders of ACUMEN (each represents a project).
+ * Nested folders are intentionally NOT returned — Hermes only files one level
+ * deep, and the app's contract is "everything stays inside ACUMEN".
+ */
+export async function listAcumenChildFolders(
+  drive: drive_v3.Drive,
+  acumenFolderId: string,
+): Promise<AcumenFolder[]> {
+  const parent = escapeDriveQueryValue(acumenFolderId);
+  const q = `'${parent}' in parents and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`;
+  const res = await drive.files.list({
+    q,
+    fields: 'files(id, name)',
+    pageSize: 500,
+    spaces: 'drive',
+    orderBy: 'name',
+  });
+  return (res.data.files ?? [])
+    .filter((file): file is drive_v3.Schema$File & { id: string } => !!file.id)
+    .map((file) => ({ id: file.id, name: file.name }));
+}
+
 export function buildAcumenParentsClause(folderIds: string[]): string {
   const ids = [...new Set(folderIds)].filter(Boolean);
   if (ids.length === 0) throw new Error('No ACUMEN folder ids available');
