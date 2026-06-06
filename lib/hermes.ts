@@ -1,25 +1,364 @@
-import 'server-only';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import "server-only";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import path from "node:path";
 
 const execFileAsync = promisify(execFile);
 
-export async function runLocalHermesForWhatsApp(from: string, text: string): Promise<string> {
-  const prompt = `You are Hermes running locally for a WhatsApp demo.
+const IMAGE_MIME_PREFIX = "image/";
 
-Incoming WhatsApp message from: ${from}
-
-User message:
-${text}
-
-Process the user's intent and reply in a concise WhatsApp-friendly way. If the user asks about Google Drive or ACUMEN, explain what you can do through the local Halketon app.`;
-
-  const { stdout } = await execFileAsync('hermes', ['chat', '-q', prompt, '--quiet'], {
-    timeout: 120_000,
-    maxBuffer: 1024 * 1024,
+async function runHermes(
+  prompt: string,
+  opts: { imagePath?: string; timeoutMs?: number } = {},
+): Promise<string> {
+  const args = ["chat", "-q", prompt, "--quiet"];
+  if (opts.imagePath) args.push("--image", opts.imagePath);
+  const { stdout } = await execFileAsync("hermes", args, {
+    timeout: opts.timeoutMs ?? 120_000,
+    maxBuffer: 4 * 1024 * 1024,
     cwd: process.cwd(),
   });
+  return stdout.trim();
+}
 
-  const reply = stdout.trim();
-  return reply || 'Done.';
+/**
+ * Hermes often wraps JSON in ```json fences or adds prose around it. Pull
+ * the first {...} block we can find and parse that.
+ */
+function extractJSONObject(raw: string): unknown {
+  const fenced = raw.match(/```(?:json)?\s*\n?([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1] : raw;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error("no JSON object found in Hermes output");
+  }
+  return JSON.parse(candidate.slice(start, end + 1));
+}
+
+/** Shared rules for every user-facing message Hermes produces. */
+const USER_VOICE_RULES = `Audiencia: una persona que trabaja en una ONG en Argentina. No es técnica.
+
+Reglas estrictas para tu respuesta:
+- Escribí en español rioplatense argentino. Usá voseo natural ("vos", "tenés", "podés") sin exagerar.
+- Tono: como un colega que ayuda. Cálido, directo, sin formalismos vacíos.
+- NUNCA menciones detalles técnicos del sistema: no nombres "ACUMEN", "Drive", "Google", "carpeta", "archivo .md", "PROYECTOS.md", "TIMELINE.csv", "_PREGUNTAS", ni nada que empiece con "_".
+- SÍ podés mencionar los nombres de proyectos reales (ej: Comedor, Mentoría) — esos sí los conoce la persona.
+- Si te referís a algo guardado, decí "lo guardé", "lo dejé anotado", "te lo anoté" — no expliques dónde técnicamente.
+- Sin emojis, sin markdown (nada de #, **, _, listas con guiones, bloques de código).
+- No saludes ni te despidas; respondé al grano.`;
+
+export async function runLocalHermesForWhatsApp(
+  from: string,
+  text: string,
+): Promise<string> {
+  const prompt = `Sos ACUMEN, asistente para ONGs. Te llegó un mensaje por WhatsApp.
+
+De: ${from}
+
+Mensaje:
+${text}
+
+${USER_VOICE_RULES}
+
+Respondé en máximo 600 caracteres.`;
+
+  const reply = await runHermes(prompt);
+  return reply || "Listo.";
+}
+
+// Accented Spanish interrogatives are unambiguous — the accent only appears in
+// interrogative / exclamative use. If they show up anywhere in the message,
+// treat it as a question.
+const ACCENTED_INTERROGATIVES = [
+  "qué",
+  "cómo",
+  "cuándo",
+  "dónde",
+  "quién",
+  "quiénes",
+  "cuál",
+  "cuáles",
+  "cuánto",
+  "cuántos",
+  "cuánta",
+  "cuántas",
+  "por qué",
+];
+
+// Start-of-message only — these unaccented words are too common mid-sentence
+// to trigger blindly ("la casa donde vivo", "la persona quien…"), but at the
+// start of a message they almost always introduce a question.
+const QUESTION_STARTERS = [
+  "que ",
+  "cual ",
+  "cuales ",
+  "como ",
+  "cuando ",
+  "donde ",
+  "quien ",
+  "quienes ",
+  "cuanto ",
+  "cuantos ",
+  "cuanta ",
+  "cuantas ",
+  "por que ",
+  "a que ",
+  "a quien ",
+  "de que ",
+];
+
+function containsWord(text: string, word: string): boolean {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\s)${escaped}(?=\\s|[?.,;:!]|$)`, "u").test(text);
+}
+
+/**
+ * Heuristic Spanish question detector. Recognises `¿…?` punctuation, accented
+ * interrogatives anywhere in the message, and common interrogatives at the
+ * start — which together cover voice transcripts (accents preserved) and
+ * keyboard messages where users skip the opening `¿`.
+ */
+export function looksLikeQuestion(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("¿") || trimmed.endsWith("?")) return true;
+
+  const lower = trimmed.toLowerCase();
+  if (ACCENTED_INTERROGATIVES.some((w) => containsWord(lower, w))) return true;
+
+  const stripped = lower.normalize("NFKD").replace(/[̀-ͯ]/g, "");
+  if (QUESTION_STARTERS.some((s) => stripped.startsWith(s))) return true;
+
+  return false;
+}
+
+export interface ProjectAggregateInput {
+  /** Folder name as it appears in PROYECTOS.md (e.g. "BECAS", "ACUMEN (raíz)"). */
+  projectName: string;
+  /** Files in the folder with their one-line summaries (empty string when none). */
+  files: { filename: string; summary: string }[];
+}
+
+/**
+ * Synthesize a 1-3 sentence aggregate summary for a project from its file
+ * summaries. The result is embedded above the file list in PROYECTOS.md so
+ * Hermes (and the user) get a "state of the project" line on top of the
+ * per-file breakdown.
+ */
+export async function summarizeProjectAggregate(
+  input: ProjectAggregateInput,
+): Promise<string> {
+  if (input.files.length === 0) return "";
+  const fileList = input.files
+    .map((f) => `- ${f.filename}: ${f.summary || "(sin resumen)"}`)
+    .join("\n");
+  const prompt = `Sos ACUMEN. Resumí en 1-3 oraciones qué hay actualmente en este proyecto, basándote SOLO en los archivos guardados que se listan abajo.
+
+Proyecto: ${input.projectName}
+
+Archivos guardados:
+${fileList}
+
+${USER_VOICE_RULES}
+
+Pautas para este resumen agregado:
+- Devolvé SOLO el párrafo, sin encabezado, sin viñetas, sin comillas.
+- Capturá temas recurrentes, montos totales/relevantes, fechas clave y hitos del proyecto.
+- Si son comprobantes/facturas, mencioná el total gastado (si los montos están claros) y el rango de fechas.
+- Si los archivos no alcanzan para un resumen claro, decilo en una frase corta.
+- Máximo 400 caracteres.
+- No inventes datos. Lo único que sabés son los resúmenes de arriba.`;
+  const reply = await runHermes(prompt);
+  return reply.trim();
+}
+
+export interface QuestionContext {
+  question: string;
+  source: "text" | "audio";
+  from: string;
+  receivedAt: Date;
+  projects: { name: string }[];
+  /** PROYECTOS.md inventory — markdown grouped by project folder. May be empty. */
+  inventory: string;
+}
+
+/**
+ * Answer a user question using the supplied Drive-derived context (project
+ * list + PROYECTOS.md inventory). Returns plain Spanish prose suitable for a
+ * WhatsApp reply.
+ */
+export async function runHermesForQuestion(
+  ctx: QuestionContext,
+): Promise<string> {
+  const isoTime = ctx.receivedAt.toISOString();
+  const projectList = ctx.projects.length
+    ? ctx.projects.map((p) => `- ${p.name}`).join("\n")
+    : "(todavía no hay proyectos)";
+  const inventorySection = ctx.inventory.trim()
+    ? `Inventario por proyecto. Cada proyecto trae primero un resumen general en cursiva y después la lista de archivos. Usá el resumen general como punto de partida y bajá al detalle de los archivos cuando haga falta.\n\n${ctx.inventory}`
+    : "Todavía no hay nada guardado.";
+
+  const prompt = `Sos ACUMEN, el asistente para ONGs. La persona te hizo una pregunta por WhatsApp (${ctx.source === "audio" ? "nota de voz" : "texto"}).
+
+De: ${ctx.from}
+Hora: ${isoTime}
+
+Proyectos activos:
+${projectList}
+
+${inventorySection}
+
+Pregunta:
+"""
+${ctx.question}
+"""
+
+${USER_VOICE_RULES}
+
+- Respondé como si estuvieras hablando con un colega de la ONG, no como un sistema.
+- Si te referís a algo guardado, decí "lo que anotaste sobre X", "el resumen de Y" — nunca menciones de dónde sacaste la info.
+- Si la información no alcanza para responder, decilo con honestidad. No inventes.
+- Máximo 600 caracteres.`;
+
+  const reply = await runHermes(prompt);
+  return (
+    reply || "No pude responder esa pregunta ahora. Probá de nuevo en un rato."
+  );
+}
+
+export interface MediaIntakeContext {
+  from: string;
+  receivedAt: Date;
+  kind: "image" | "document" | "audio" | "video" | "sticker" | "other";
+  originalFilename: string;
+  contentType: string;
+  byteSize?: number;
+  caption?: string;
+  transcript?: string;
+  /** Local path to the downloaded media — passed to Hermes via --image for images. */
+  localPath: string;
+  /** Existing ACUMEN child folders (= projects). Names only — Hermes picks by name. */
+  projects: { name: string }[];
+}
+
+export interface MediaIntakePlan {
+  /** Filename for the original file. Includes extension. */
+  filename: string;
+  /** One-line Spanish summary suitable for the WhatsApp reply. */
+  summary: string;
+  /** Optional markdown notes to save alongside the original. */
+  notes?: string;
+  /** Name of an existing project subfolder. If omitted or unmatched, file goes to ACUMEN root. */
+  project?: string;
+}
+
+function safeFilename(name: string, fallbackExt: string): string {
+  // Strip path separators, control chars, leading dots; collapse whitespace.
+  let cleaned = name
+    .replace(/[\\/ -]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^\.+/, "")
+    .trim();
+  if (!cleaned) cleaned = `archivo${fallbackExt}`;
+  // Cap length to keep Drive happy.
+  if (cleaned.length > 180) {
+    const ext = path.extname(cleaned);
+    cleaned = cleaned.slice(0, 180 - ext.length) + ext;
+  }
+  // Ensure an extension.
+  if (!path.extname(cleaned) && fallbackExt) cleaned += fallbackExt;
+  return cleaned;
+}
+
+/**
+ * Run Hermes over an inbound WhatsApp media message. Hermes decides the
+ * filename (and an optional companion notes document) for storage in the
+ * user's ACUMEN folder. For images, Hermes gets the file via --image and
+ * can describe what it sees; for audio we feed in Kapso's transcript; for
+ * everything else Hermes works from metadata + caption only.
+ */
+export async function runHermesForMediaIntake(
+  ctx: MediaIntakeContext,
+): Promise<MediaIntakePlan> {
+  const isoTime = ctx.receivedAt.toISOString();
+  const fallbackExt = path.extname(ctx.originalFilename) || ".bin";
+  const captionLine = ctx.caption ? `\nCaption: """${ctx.caption}"""` : "";
+  const transcriptLine = ctx.transcript
+    ? `\nKapso transcript: """${ctx.transcript}"""`
+    : "";
+  const projectList = ctx.projects.length
+    ? ctx.projects.map((p) => `- ${p.name}`).join("\n")
+    : "(none — there are no project subfolders yet)";
+
+  const prompt = `Sos ACUMEN, el asistente para ONGs. Acaba de llegar un ${ctx.kind} por WhatsApp.
+
+De: ${ctx.from}
+Hora: ${isoTime}
+
+Tenés que decidir tres cosas:
+  1. El nombre con el que guardar el archivo (en español, descriptivo).
+  2. Si pertenece a alguno de los proyectos existentes listados abajo, o si va sin proyecto.
+  3. Si conviene generar un documento de notas en markdown junto al archivo.
+
+Proyectos existentes (NO inventes nuevos, solo elegí de esta lista):
+${projectList}
+
+Metadata del archivo:
+- Nombre original: ${ctx.originalFilename}
+- Tipo: ${ctx.contentType}
+- Tamaño: ${ctx.byteSize ?? "desconocido"} bytes${captionLine}${transcriptLine}
+
+Devolvé SOLO JSON válido (sin prosa, sin bloques de código) con esta forma exacta:
+
+{
+  "filename": "<nombre final con extensión, en español, descriptivo, máx 180 chars; conservá la extensión '${fallbackExt}' salvo motivo fuerte>",
+  "summary": "<resumen de UNA línea en español rioplatense (voseo), tono de colega, máx 120 chars. Para notas de voz, decí qué se dijo, no que llegó un audio. Para comprobantes/facturas/recibos, incluí monto (con $ y miles) y fecha si están visibles — esto se usa después para responder consultas tipo 'cuánto se gastó'. NO menciones carpetas, archivos, Drive, ACUMEN ni nada técnico.>",
+  "project": "<OPCIONAL: nombre EXACTO de un proyecto de la lista arriba si claramente pertenece a uno. NUNCA inventes proyectos nuevos. Si tenés dudas, omití el campo.>",
+  "notes": "<OPCIONAL: documento markdown que se guarda junto al archivo. Incluilo en notas de voz (con secciones '## Resumen' y '## Transcripción'), imágenes (descripción + observaciones) y documentos (puntos clave). Omitilo en stickers o archivos donde no agregue valor.>"
+}`;
+
+  const useImage =
+    ctx.kind === "image" || ctx.contentType.startsWith(IMAGE_MIME_PREFIX);
+
+  let plan: MediaIntakePlan = {
+    filename: safeFilename(ctx.originalFilename, fallbackExt),
+    summary: `Archivo recibido (${ctx.kind}).`,
+  };
+
+  let raw = "";
+  try {
+    raw = await runHermes(prompt, {
+      imagePath: useImage ? ctx.localPath : undefined,
+    });
+    const parsed = extractJSONObject(raw) as {
+      filename?: unknown;
+      summary?: unknown;
+      notes?: unknown;
+      project?: unknown;
+    };
+    if (typeof parsed.filename === "string" && parsed.filename.trim()) {
+      plan.filename = safeFilename(parsed.filename.trim(), fallbackExt);
+    }
+    if (typeof parsed.summary === "string" && parsed.summary.trim()) {
+      plan.summary = parsed.summary.trim().slice(0, 200);
+    }
+    if (typeof parsed.notes === "string" && parsed.notes.trim()) {
+      plan.notes = parsed.notes.trim();
+    }
+    if (typeof parsed.project === "string" && parsed.project.trim()) {
+      plan.project = parsed.project.trim();
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[hermes] media intake plan parse failed:",
+      err instanceof Error ? err.message : err,
+      "\nRaw output (truncated):",
+      raw.slice(0, 800),
+    );
+  }
+
+  return plan;
 }

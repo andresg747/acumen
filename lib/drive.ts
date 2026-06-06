@@ -7,6 +7,15 @@ export const DEFAULT_FILE_FIELDS =
 export const ACUMEN_FOLDER_NAME = 'ACUMEN';
 export const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
+/** Folders inside ACUMEN whose names start with this prefix are system folders, not projects. */
+export const SYSTEM_FOLDER_PREFIX = '_';
+/** Canonical name of the system folder where inbound questions are archived. */
+export const PREGUNTAS_FOLDER_NAME = '_PREGUNTAS';
+
+export function isSystemFolderName(name: string | null | undefined): boolean {
+  return typeof name === 'string' && name.startsWith(SYSTEM_FOLDER_PREFIX);
+}
+
 export interface AcumenFolder {
   id: string;
   name?: string | null;
@@ -27,13 +36,23 @@ export async function findAcumenFolders(drive: drive_v3.Drive): Promise<AcumenFo
   const q = `name = '${name}' and mimeType = '${FOLDER_MIME_TYPE}' and 'root' in parents and trashed = false`;
   const result = await drive.files.list({
     q,
-    fields: 'files(id, name)',
+    fields: 'files(id, name, createdTime)',
     pageSize: 100,
     spaces: 'drive',
+    // Oldest first — keeps the canonical ACUMEN choice stable when duplicates
+    // exist (e.g., after an OAuth scope change made a previous folder invisible).
+    orderBy: 'createdTime',
   });
-  return (result.data.files ?? [])
+  const folders = (result.data.files ?? [])
     .filter((file): file is drive_v3.Schema$File & { id: string } => !!file.id)
     .map((file) => ({ id: file.id, name: file.name }));
+  if (folders.length > 1) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[halketon] Found ${folders.length} root-level ACUMEN folders. Using the oldest (${folders[0].id}). Consider trashing duplicates in Drive.`,
+    );
+  }
+  return folders;
 }
 
 /**
@@ -75,6 +94,64 @@ export async function ensureAcumenFolders(drive: drive_v3.Drive): Promise<Acumen
   if (existing.length > 0) return existing;
   const id = await ensureAcumenFolder(drive);
   return [{ id, name: ACUMEN_FOLDER_NAME }];
+}
+
+/**
+ * Ensure the `_PREGUNTAS` system folder exists as a direct child of ACUMEN.
+ * Returns its id. Idempotent.
+ */
+export async function ensurePreguntasFolder(
+  drive: drive_v3.Drive,
+  acumenFolderId: string,
+): Promise<string> {
+  const safeName = escapeDriveQueryValue(PREGUNTAS_FOLDER_NAME);
+  const safeParent = escapeDriveQueryValue(acumenFolderId);
+  const q = `name = '${safeName}' and mimeType = '${FOLDER_MIME_TYPE}' and '${safeParent}' in parents and trashed = false`;
+  const res = await drive.files.list({
+    q,
+    fields: 'files(id)',
+    pageSize: 1,
+    spaces: 'drive',
+  });
+  const existing = res.data.files?.[0]?.id;
+  if (existing) return existing;
+  const created = await drive.files.create({
+    requestBody: {
+      name: PREGUNTAS_FOLDER_NAME,
+      mimeType: FOLDER_MIME_TYPE,
+      parents: [acumenFolderId],
+    },
+    fields: 'id',
+  });
+  const id = created.data.id;
+  if (!id) throw new Error('Drive did not return an id for the _PREGUNTAS folder');
+  return id;
+}
+
+/**
+ * List the direct child folders of ACUMEN (each represents a project).
+ * Nested folders are intentionally NOT returned — Hermes only files one level
+ * deep, and the app's contract is "everything stays inside ACUMEN".
+ *
+ * NOTE: includes system folders (those starting with `_`). Filter with
+ * `isSystemFolderName()` for project routing.
+ */
+export async function listAcumenChildFolders(
+  drive: drive_v3.Drive,
+  acumenFolderId: string,
+): Promise<AcumenFolder[]> {
+  const parent = escapeDriveQueryValue(acumenFolderId);
+  const q = `'${parent}' in parents and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`;
+  const res = await drive.files.list({
+    q,
+    fields: 'files(id, name)',
+    pageSize: 500,
+    spaces: 'drive',
+    orderBy: 'name',
+  });
+  return (res.data.files ?? [])
+    .filter((file): file is drive_v3.Schema$File & { id: string } => !!file.id)
+    .map((file) => ({ id: file.id, name: file.name }));
 }
 
 export function buildAcumenParentsClause(folderIds: string[]): string {
