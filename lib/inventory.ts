@@ -1,4 +1,5 @@
 import 'server-only';
+import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { drive_v3 } from 'googleapis';
 import {
@@ -8,21 +9,34 @@ import {
   listAcumenChildFolders,
 } from './drive';
 import { PROYECTOS_MD_NAME, TIMELINE_CSV_NAME } from './ledger';
+import { summarizeProjectAggregate } from './hermes';
 
 const TITLE = '# Inventario de ACUMEN';
 const SUBTITLE = '_Resumen del contenido por carpeta. Se actualiza solo._';
 const ROOT_LABEL = 'ACUMEN (raíz)';
-const INVENTORY_OWN_FILES = new Set([PROYECTOS_MD_NAME, TIMELINE_CSV_NAME]);
+const AGGREGATES_CACHE_NAME = '_AGGREGATES.json';
+const INVENTORY_OWN_FILES = new Set([
+  PROYECTOS_MD_NAME,
+  TIMELINE_CSV_NAME,
+  AGGREGATES_CACHE_NAME,
+]);
 
-interface ListedFile {
-  id: string;
+interface SectionFile {
   name: string;
+  summary: string;
 }
 
 interface FolderSection {
   name: string;
-  files: ListedFile[];
+  files: SectionFile[];
 }
+
+interface CachedAggregate {
+  hash: string;
+  aggregate: string;
+}
+
+type AggregateCache = Record<string, CachedAggregate>;
 
 async function findFileByName(
   drive: drive_v3.Drive,
@@ -44,10 +58,10 @@ async function findFileByName(
 async function listNonFolderChildren(
   drive: drive_v3.Drive,
   parentId: string,
-): Promise<ListedFile[]> {
+): Promise<{ id: string; name: string }[]> {
   const parent = escapeDriveQueryValue(parentId);
   const q = `'${parent}' in parents and trashed = false and mimeType != '${FOLDER_MIME_TYPE}'`;
-  const out: ListedFile[] = [];
+  const out: { id: string; name: string }[] = [];
   let pageToken: string | undefined;
   do {
     const res = await drive.files.list({
@@ -119,6 +133,127 @@ async function loadSummariesFromTimeline(
   return map;
 }
 
+async function loadAggregateCache(
+  drive: drive_v3.Drive,
+  acumenFolderId: string,
+): Promise<AggregateCache> {
+  const id = await findFileByName(drive, acumenFolderId, AGGREGATES_CACHE_NAME);
+  if (!id) return {};
+  try {
+    const res = await drive.files.get(
+      { fileId: id, alt: 'media' },
+      { responseType: 'text' },
+    );
+    const text = typeof res.data === 'string' ? res.data : String(res.data ?? '');
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: AggregateCache = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (
+        v &&
+        typeof v === 'object' &&
+        typeof (v as CachedAggregate).hash === 'string' &&
+        typeof (v as CachedAggregate).aggregate === 'string'
+      ) {
+        out[k] = v as CachedAggregate;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function saveAggregateCache(
+  drive: drive_v3.Drive,
+  acumenFolderId: string,
+  cache: AggregateCache,
+): Promise<void> {
+  const id = await findFileByName(drive, acumenFolderId, AGGREGATES_CACHE_NAME);
+  const content = JSON.stringify(cache, null, 2);
+  const body = Readable.from(Buffer.from(content, 'utf8'));
+  const mimeType = 'application/json';
+  if (id) {
+    await drive.files.update({ fileId: id, media: { mimeType, body } });
+    return;
+  }
+  await drive.files.create({
+    requestBody: {
+      name: AGGREGATES_CACHE_NAME,
+      mimeType,
+      parents: [acumenFolderId],
+    },
+    media: { mimeType, body },
+  });
+}
+
+function computeSectionHash(files: SectionFile[]): string {
+  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+  const payload = JSON.stringify(sorted.map((f) => [f.name, f.summary]));
+  return crypto.createHash('sha256').update(payload).digest('hex');
+}
+
+/**
+ * Decide which sections need a fresh aggregate (hash mismatch or no cache),
+ * call Hermes in parallel for those, fall back to the previous cached value
+ * on failure. Empty sections get no aggregate.
+ */
+async function resolveAggregates(
+  sections: FolderSection[],
+  cache: AggregateCache,
+  forceRegenerate: boolean,
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  const toRegen: { section: FolderSection; hash: string }[] = [];
+
+  for (const section of sections) {
+    if (section.files.length === 0) continue;
+    const hash = computeSectionHash(section.files);
+    const cached = cache[section.name];
+    if (!forceRegenerate && cached && cached.hash === hash) {
+      result.set(section.name, cached.aggregate);
+    } else {
+      toRegen.push({ section, hash });
+    }
+  }
+
+  const generated = await Promise.allSettled(
+    toRegen.map(({ section }) =>
+      summarizeProjectAggregate({
+        projectName: section.name,
+        files: section.files.map((f) => ({ filename: f.name, summary: f.summary })),
+      }),
+    ),
+  );
+
+  toRegen.forEach(({ section }, i) => {
+    const r = generated[i];
+    if (r.status === 'fulfilled' && r.value.trim()) {
+      result.set(section.name, r.value.trim());
+      return;
+    }
+    // On failure, fall back to the prior cached aggregate even though file
+    // list changed — a stale summary beats no summary in the inventory.
+    const prev = cache[section.name];
+    if (prev) {
+      result.set(section.name, prev.aggregate);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[inventory] aggregate regen failed for ${section.name}, falling back to cached.`,
+        r.status === 'rejected' ? r.reason : '',
+      );
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[inventory] aggregate generation failed for ${section.name}, leaving blank.`,
+        r.status === 'rejected' ? r.reason : '',
+      );
+    }
+  });
+
+  return result;
+}
+
 function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
@@ -143,18 +278,27 @@ function formatUpdatedAt(d: Date): string {
 
 function renderInventory(
   sections: FolderSection[],
-  summaries: Map<string, string>,
+  aggregates: Map<string, string>,
   now: Date,
 ): string {
   const lines: string[] = [TITLE, '', SUBTITLE, ''];
   for (const section of sections) {
     lines.push(`## ${section.name}`);
+    lines.push('');
     if (section.files.length === 0) {
       lines.push('_Vacía._');
     } else {
+      const aggregate = aggregates.get(section.name);
+      if (aggregate) {
+        lines.push(`_${aggregate}_`);
+        lines.push('');
+      }
       for (const file of section.files) {
-        const summary = summaries.get(file.name);
-        lines.push(summary ? `- **${file.name}** — ${summary}` : `- **${file.name}**`);
+        lines.push(
+          file.summary
+            ? `- **${file.name}** — ${file.summary}`
+            : `- **${file.name}**`,
+        );
       }
     }
     lines.push('');
@@ -188,27 +332,40 @@ async function upsertInventoryFile(
 export interface InventoryStats {
   folders: number;
   files: number;
+  aggregatesRegenerated: number;
+}
+
+export interface RebuildOptions {
+  /** Ignore the sidecar cache and re-summarize every project. */
+  force?: boolean;
 }
 
 /**
  * Rebuild PROYECTOS.md by walking ACUMEN root and each non-system child
- * folder. Summaries are pulled from TIMELINE.csv when present; pre-existing
- * files without a timeline entry render as filename-only.
+ * folder. Per-file lines come from TIMELINE.csv (fallback: filename only).
+ * Each section gets a Hermes-synthesized aggregate paragraph above its file
+ * list — cached in _AGGREGATES.json so only sections whose file list changed
+ * trigger a fresh Hermes call.
  *
- * Safe to call after every upload — the rebuild is a single Drive walk, and
- * a single source of truth beats incremental patching for this dataset size.
+ * Safe to call after every upload — the cache turns the typical incremental
+ * case into one Hermes call (for the affected project only).
  */
 export async function rebuildProyectosInventory(
   drive: drive_v3.Drive,
   acumenFolderId: string,
+  opts: RebuildOptions = {},
 ): Promise<InventoryStats> {
-  const [summaries, childFolders, rootFilesRaw] = await Promise.all([
+  const [summaries, childFolders, rootFilesRaw, cache] = await Promise.all([
     loadSummariesFromTimeline(drive, acumenFolderId),
     listAcumenChildFolders(drive, acumenFolderId),
     listNonFolderChildren(drive, acumenFolderId),
+    loadAggregateCache(drive, acumenFolderId),
   ]);
 
-  const rootFiles = rootFilesRaw.filter((f) => !INVENTORY_OWN_FILES.has(f.name));
+  const rootFiles: SectionFile[] = rootFilesRaw
+    .filter((f) => !INVENTORY_OWN_FILES.has(f.name))
+    .map((f) => ({ name: f.name, summary: summaries.get(f.name) ?? '' }));
+
   const sections: FolderSection[] = [{ name: ROOT_LABEL, files: rootFiles }];
 
   const projectFolders = childFolders.filter(
@@ -220,15 +377,37 @@ export async function rebuildProyectosInventory(
     projectFolders.map((f) => listNonFolderChildren(drive, f.id)),
   );
   projectFolders.forEach((folder, i) => {
-    sections.push({ name: folder.name, files: projectFiles[i] });
+    sections.push({
+      name: folder.name,
+      files: projectFiles[i].map((f) => ({
+        name: f.name,
+        summary: summaries.get(f.name) ?? '',
+      })),
+    });
   });
 
-  const content = renderInventory(sections, summaries, new Date());
+  const aggregates = await resolveAggregates(sections, cache, opts.force ?? false);
+
+  // Rebuild the cache so deleted projects don't leak stale entries.
+  const newCache: AggregateCache = {};
+  let regenerated = 0;
+  for (const section of sections) {
+    if (section.files.length === 0) continue;
+    const aggregate = aggregates.get(section.name);
+    if (!aggregate) continue;
+    const hash = computeSectionHash(section.files);
+    newCache[section.name] = { hash, aggregate };
+    if (cache[section.name]?.hash !== hash) regenerated += 1;
+  }
+  await saveAggregateCache(drive, acumenFolderId, newCache);
+
+  const content = renderInventory(sections, aggregates, new Date());
   await upsertInventoryFile(drive, acumenFolderId, content);
 
   return {
     folders: sections.length,
     files: sections.reduce((sum, s) => sum + s.files.length, 0),
+    aggregatesRegenerated: regenerated,
   };
 }
 
