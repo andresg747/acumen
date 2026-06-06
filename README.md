@@ -52,6 +52,52 @@ GOOGLE_DRIVE_SCOPES=https://www.googleapis.com/auth/drive
 | `GOOGLE_DRIVE_SCOPES` | `https://www.googleapis.com/auth/drive.file` | Space- or comma-separated scopes |
 | `GOOGLE_TOKEN_PATH` | `./google-token.json` | Where the refresh/access tokens are persisted |
 
+## App environment flag (`NEXT_PUBLIC_APP_ENV`)
+
+The Next.js frontend uses a single flag to switch between a credential-free demo
+mode and a real, authenticated mode. It is read in `lib/app-env.ts`:
+
+```ts
+export const APP_ENV =
+  process.env.NEXT_PUBLIC_APP_ENV?.toLowerCase() === 'prod' ? 'prod' : 'dev';
+
+export const isProd = APP_ENV === 'prod';
+export const isDev = !isProd;
+```
+
+| Value | Authentication | Data | Demo toggle |
+| --- | --- | --- | --- |
+| `dev` *(default)* | **Bypassed** — clicking *Iniciar sesión* / *Crear una cuenta* simulates success and routes straight into the app | Dashboard shows **mock/sample data** | "Ver con datos / Ver estado vacío" toggle is visible |
+| `prod` | **Real Google OAuth** — buttons call `/api/auth/google`, the session is verified via `/api/auth/status`, and `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` are required | **No mock data** — only real data is rendered | Toggle is hidden |
+
+### How it works
+
+- **`NEXT_PUBLIC_` prefix:** the value is inlined at build time, so the same flag
+  works in both Server and Client Components (the onboarding buttons and the
+  dashboard read it in the browser).
+- **Default is `dev`:** if the variable is unset or anything other than `prod`,
+  the app falls back to `dev`. This keeps local previews working without Google
+  credentials.
+- **Where it branches:**
+  - `app/components/onboarding.tsx` — in `dev` it fakes a successful sign-in; in
+    `prod` it kicks off the real OAuth redirect.
+  - `app/page.tsx` — in `prod` it checks `/api/auth/status` on load (and clears
+    the session through `/api/auth/logout` on sign-out); in `dev` it skips the
+    check entirely.
+  - `app/components/dashboard.tsx` — the mock data and the demo toggle only
+    exist in `dev`.
+
+### Setting it
+
+- **Local / preview:** leave it unset (defaults to `dev`) or set `NEXT_PUBLIC_APP_ENV=dev`.
+- **Production deployment:** set `NEXT_PUBLIC_APP_ENV=prod` and make sure
+  `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are also configured.
+
+```env
+# .env (frontend mode)
+NEXT_PUBLIC_APP_ENV=dev   # or "prod"
+```
+
 ## Endpoints
 
 ### Health & auth
