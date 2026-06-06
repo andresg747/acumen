@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -242,6 +243,10 @@ export default function UploadPage() {
             </ul>
           </div>
         )}
+
+        <Link href="/" style={{ width: '100%', marginTop: 24 }}>
+          <button style={{ width: '100%' }}>Volver</button>
+        </Link>
       </div>
     </main>
   );
