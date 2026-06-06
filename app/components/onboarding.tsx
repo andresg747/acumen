@@ -1,11 +1,22 @@
 'use client';
 
 import { useState } from 'react';
+import { isProd } from '@/lib/app-env';
 
 interface OnboardingProps {
   onError: (message: string) => void;
   onSuccess: (mode: 'login' | 'register') => void;
   error?: string;
+}
+
+async function getGoogleAuthUrl(): Promise<string> {
+  const res = await fetch('/api/auth/google?redirect=0');
+  const text = await res.text();
+  const body = text ? JSON.parse(text) : {};
+  if (!res.ok) {
+    throw new Error(body?.error ?? 'No pudimos conectar con Google. Intenta de nuevo.');
+  }
+  return body.url as string;
 }
 
 function GoogleIcon() {
@@ -34,14 +45,26 @@ function GoogleIcon() {
 export default function Onboarding({ onError, onSuccess, error }: OnboardingProps) {
   const [loading, setLoading] = useState<'login' | 'register' | null>(null);
 
-  // Mock auth: simulate a successful sign-in/registration.
-  // Replace this with the real Google flow when ready.
-  function handleGoogle(mode: 'login' | 'register') {
+  // In dev we bypass auth and simulate success so the UI can be explored
+  // without Google credentials. In prod we kick off the real Google OAuth flow.
+  async function handleGoogle(mode: 'login' | 'register') {
     setLoading(mode);
     onError('');
-    setTimeout(() => {
-      onSuccess(mode);
-    }, 700);
+
+    if (!isProd) {
+      setTimeout(() => {
+        onSuccess(mode);
+      }, 700);
+      return;
+    }
+
+    try {
+      const url = await getGoogleAuthUrl();
+      window.location.href = url;
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Algo salió mal. Intenta de nuevo.');
+      setLoading(null);
+    }
   }
 
   return (

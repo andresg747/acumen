@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { isProd } from '@/lib/app-env';
 
 interface DashboardProps {
   onLogout: () => void;
@@ -70,8 +71,10 @@ const EVIDENCE: Evidence[] = [
 ];
 
 export default function Dashboard({ onLogout, onConnectWhatsApp }: DashboardProps) {
-  // Demo toggle: in a real app this comes from the backend.
+  // Demo toggle for dev only. In prod there is no mock data, so the dashboard
+  // shows the real (currently empty) state until a backend provides data.
   const [hasData, setHasData] = useState(false);
+  const showData = !isProd && hasData;
 
   return (
     <div className="dash-shell">
@@ -84,14 +87,16 @@ export default function Dashboard({ onLogout, onConnectWhatsApp }: DashboardProp
         </div>
 
         <div className="dash-topbar-right">
-          <button
-            type="button"
-            className="demo-toggle"
-            onClick={() => setHasData((v) => !v)}
-            title="Demostración: alterna entre el estado vacío y con datos"
-          >
-            {hasData ? 'Ver estado vacío' : 'Ver con datos'}
-          </button>
+          {!isProd && (
+            <button
+              type="button"
+              className="demo-toggle"
+              onClick={() => setHasData((v) => !v)}
+              title="Demostración: alterna entre el estado vacío y con datos"
+            >
+              {hasData ? 'Ver estado vacío' : 'Ver con datos'}
+            </button>
+          )}
           <div className="dash-user" aria-hidden="true">
             <span className="avatar">AC</span>
           </div>
@@ -102,7 +107,7 @@ export default function Dashboard({ onLogout, onConnectWhatsApp }: DashboardProp
       </header>
 
       <main className="dash-body">
-        {hasData ? (
+        {showData ? (
           <PopulatedState onConnectWhatsApp={onConnectWhatsApp} />
         ) : (
           <EmptyState onConnectWhatsApp={onConnectWhatsApp} />
