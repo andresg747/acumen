@@ -1,6 +1,6 @@
 import 'server-only';
 import { Readable } from 'node:stream';
-import { getDriveClient, getOrCreateAcumenFolderId } from './google';
+import type { drive_v3 } from 'googleapis';
 import { DEFAULT_FILE_FIELDS } from './drive';
 
 export interface DriveUploadResult {
@@ -11,26 +11,23 @@ export interface DriveUploadResult {
 }
 
 /**
- * Upload a buffer to the user's ACUMEN folder. Auth comes from the session
- * cookie OR the GOOGLE_TOKEN_PATH file fallback — works inside webhook
- * handlers that have no cookie context.
+ * Upload a buffer to a specific Drive folder. Auth and folder resolution are
+ * the caller's responsibility — pass the Drive client and the parent folder
+ * id directly. Keeps this helper agnostic to whether the caller is a browser
+ * request (cookie auth) or a webhook (service-token auth).
  */
-export async function uploadBufferToAcumen(params: {
+export async function uploadFileToFolder(params: {
+  drive: drive_v3.Drive;
+  parentFolderId: string;
   name: string;
   mimeType: string;
   buffer: Buffer;
-  /** Optional. Must be the ACUMEN folder or one of its direct children. */
-  parentFolderId?: string;
 }): Promise<DriveUploadResult> {
-  const drive = await getDriveClient();
-  const acumenFolderId = await getOrCreateAcumenFolderId();
-  const parentFolderId = params.parentFolderId ?? acumenFolderId;
-
-  const result = await drive.files.create({
+  const result = await params.drive.files.create({
     requestBody: {
       name: params.name,
       mimeType: params.mimeType,
-      parents: [parentFolderId],
+      parents: [params.parentFolderId],
     },
     media: {
       mimeType: params.mimeType,
