@@ -2,24 +2,35 @@
 
 import { useState } from 'react';
 import Onboarding from './components/onboarding';
+import OrgOnboarding from './components/org-onboarding';
 import WhatsAppGuide from './components/whatsapp-guide';
 
+type Stage = 'login' | 'org' | 'guide';
+
 export default function HomePage() {
-  const [authenticated, setAuthenticated] = useState(false);
+  const [stage, setStage] = useState<Stage>('login');
   const [error, setError] = useState('');
 
   function handleLogout() {
-    setAuthenticated(false);
+    setStage('login');
   }
 
-  if (!authenticated) {
+  if (stage === 'login') {
     return (
       <main>
         <Onboarding
           onError={setError}
-          onSuccess={() => setAuthenticated(true)}
+          onSuccess={() => setStage('org')}
           error={error}
         />
+      </main>
+    );
+  }
+
+  if (stage === 'org') {
+    return (
+      <main>
+        <OrgOnboarding onFinish={() => setStage('guide')} />
       </main>
     );
   }
