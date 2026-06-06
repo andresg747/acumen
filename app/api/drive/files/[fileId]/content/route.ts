@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { Readable } from 'node:stream';
 import { getDriveClient } from '@/lib/google';
-import { EXPORT_MAP, nonEmpty } from '@/lib/drive';
+import { EXPORT_MAP, assertFileInAcumen, ensureAcumenFolders, nonEmpty } from '@/lib/drive';
 import { errorResponse } from '@/lib/http';
 
 export const runtime = 'nodejs';
@@ -12,6 +12,8 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
   try {
     const { fileId } = await ctx.params;
     const drive = await getDriveClient();
+    const acumenFolderIds = (await ensureAcumenFolders(drive)).map((folder) => folder.id);
+    await assertFileInAcumen(drive, fileId, acumenFolderIds);
     const meta = await drive.files.get({
       fileId,
       fields: 'id, name, mimeType',

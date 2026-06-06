@@ -76,7 +76,9 @@ export function loadConfig(): AppConfig {
 
   const tokenPathRaw = pickEnv('GOOGLE_TOKEN_PATH');
   const tokenPath =
-    tokenPathRaw && !isVercel() ? path.resolve(process.cwd(), tokenPathRaw) : null;
+    tokenPathRaw && !isVercel()
+      ? path.resolve(/* turbopackIgnore: true */ process.cwd(), tokenPathRaw)
+      : null;
 
   const authSecret = pickEnv('AUTH_SECRET', 'OAUTH_COOKIE_SECRET') ?? deriveDevAuthSecret();
 

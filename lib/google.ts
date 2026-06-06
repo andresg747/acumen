@@ -2,9 +2,12 @@ import 'server-only';
 import { google, drive_v3 } from 'googleapis';
 import type { Credentials, OAuth2Client } from 'google-auth-library';
 import { loadConfig } from './config';
+import { ensureAcumenFolder } from './drive';
 import {
   readSessionCredentials,
+  readSessionState,
   writeSessionCredentials,
+  writeSessionState,
 } from './session';
 
 export class AuthRequiredError extends Error {
@@ -81,4 +84,32 @@ export async function getDriveClient(): Promise<drive_v3.Drive> {
 export async function hasSessionCredentials(): Promise<boolean> {
   const creds = await readSessionCredentials();
   return !!(creds && (creds.access_token || creds.refresh_token));
+}
+
+/**
+ * Build a Drive client directly from a set of credentials, without reading
+ * from the session cookie. Useful immediately after token exchange when the
+ * cookie has not yet been written to the response.
+ */
+export function getDriveClientForCredentials(creds: Credentials): drive_v3.Drive {
+  const client = newOAuthClient();
+  client.setCredentials(creds);
+  return google.drive({ version: 'v3', auth: client });
+}
+
+/**
+ * Return the ACUMEN folder id for the current session, ensuring it exists
+ * in Drive if necessary and persisting the id to the session cookie.
+ */
+export async function getOrCreateAcumenFolderId(): Promise<string> {
+  const state = await readSessionState();
+  if (!state || (!state.creds.access_token && !state.creds.refresh_token)) {
+    throw new AuthRequiredError();
+  }
+  const drive = await getDriveClient();
+  const folderId = await ensureAcumenFolder(drive);
+  if (state.acumenFolderId !== folderId) {
+    await writeSessionState({ ...state, acumenFolderId: folderId });
+  }
+  return folderId;
 }

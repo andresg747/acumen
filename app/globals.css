@@ -1412,4 +1412,113 @@ button.demo-toggle:hover:not(:disabled) {
     grid-template-columns: 1fr 1fr;
     align-items: start;
   }
+.success {
+  color: #059669;
+  font-weight: 700;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.upload-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+}
+
+.upload-center {
+  width: 100%;
+  max-width: 640px;
+  text-align: center;
+}
+
+.upload-title {
+  font-size: 28px;
+  margin: 0 0 8px 0;
+}
+
+.upload-subtitle {
+  margin: 0 0 24px 0;
+  font-size: 15px;
+}
+
+.upload-cta {
+  font-size: 16px;
+  padding: 14px 28px;
+  border-radius: 8px;
+}
+
+.upload-error {
+  margin-top: 16px;
+}
+
+.upload-results {
+  margin-top: 24px;
+  text-align: left;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.upload-results h2 {
+  margin-top: 0;
+}
+
+.upload-results ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.dropzone {
+  margin: 0 auto;
+  padding: 56px 24px;
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    transform 120ms ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  outline: none;
+}
+
+.dropzone:hover,
+.dropzone:focus-visible {
+  border-color: var(--accent);
+}
+
+.dropzone--active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+  transform: scale(1.01);
+}
+
+.dropzone--busy {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.dropzone__icon {
+  font-size: 36px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.dropzone__primary {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.dropzone__hint {
+  font-size: 13px;
 }

@@ -1,7 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { Readable } from 'node:stream';
-import { getDriveClient } from '@/lib/google';
-import { DEFAULT_FILE_FIELDS, nonEmpty, parsePageSize } from '@/lib/drive';
+import { getDriveClient, getOrCreateAcumenFolderId } from '@/lib/google';
+import {
+  DEFAULT_FILE_FIELDS,
+  buildAcumenParentsClause,
+  ensureAcumenFolders,
+  nonEmpty,
+  parsePageSize,
+} from '@/lib/drive';
 import { errorResponse } from '@/lib/http';
 
 export const runtime = 'nodejs';
@@ -9,15 +15,19 @@ export const runtime = 'nodejs';
 export async function GET(req: NextRequest) {
   try {
     const drive = await getDriveClient();
+    const acumenFolders = await ensureAcumenFolders(drive);
     const { searchParams } = req.nextUrl;
     const query = nonEmpty(searchParams.get('query'));
     const pageToken = nonEmpty(searchParams.get('pageToken'));
     const pageSize = parsePageSize(searchParams.get('pageSize'));
 
+    const parentClause = buildAcumenParentsClause(acumenFolders.map((folder) => folder.id));
+    const q = query ? `(${query}) and ${parentClause}` : parentClause;
+
     const result = await drive.files.list({
       pageSize,
       pageToken,
-      q: query,
+      q,
       fields: `nextPageToken, files(${DEFAULT_FILE_FIELDS})`,
       spaces: 'drive',
     });
@@ -42,10 +52,10 @@ export async function POST(req: NextRequest) {
       );
     }
     const drive = await getDriveClient();
+    const acumenFolderId = await getOrCreateAcumenFolderId();
 
     const fallbackName = file.name && file.name.length > 0 ? file.name : 'untitled';
     const name = nonEmpty(form.get('name')?.toString() ?? null) ?? fallbackName;
-    const parentId = nonEmpty(form.get('parentId')?.toString() ?? null);
     const mimeType = file.type || 'application/octet-stream';
 
     const buf = Buffer.from(await file.arrayBuffer());
@@ -53,7 +63,7 @@ export async function POST(req: NextRequest) {
       requestBody: {
         name,
         mimeType,
-        parents: parentId ? [parentId] : undefined,
+        parents: [acumenFolderId],
       },
       media: {
         mimeType,

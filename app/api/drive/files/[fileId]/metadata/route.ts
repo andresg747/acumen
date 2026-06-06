@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getDriveClient } from '@/lib/google';
-import { DEFAULT_FILE_FIELDS, nonEmpty } from '@/lib/drive';
+import { DEFAULT_FILE_FIELDS, assertFileInAcumen, ensureAcumenFolders } from '@/lib/drive';
 import { errorResponse } from '@/lib/http';
 
 export const runtime = 'nodejs';
@@ -35,18 +35,11 @@ export async function PATCH(req: NextRequest, ctx: RouteContext) {
     }
 
     const drive = await getDriveClient();
-    const addParents = nonEmpty(
-      typeof body.addParents === 'string' ? body.addParents : null,
-    );
-    const removeParents = nonEmpty(
-      typeof body.removeParents === 'string' ? body.removeParents : null,
-    );
-
+    const acumenFolderIds = (await ensureAcumenFolders(drive)).map((folder) => folder.id);
+    await assertFileInAcumen(drive, fileId, acumenFolderIds);
     const result = await drive.files.update({
       fileId,
       requestBody,
-      addParents,
-      removeParents,
       fields: DEFAULT_FILE_FIELDS,
     });
     return NextResponse.json(result.data);

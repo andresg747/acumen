@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { Readable } from 'node:stream';
 import { getDriveClient } from '@/lib/google';
-import { DEFAULT_FILE_FIELDS, nonEmpty } from '@/lib/drive';
+import { DEFAULT_FILE_FIELDS, assertFileInAcumen, ensureAcumenFolders, nonEmpty } from '@/lib/drive';
 import { errorResponse } from '@/lib/http';
 
 export const runtime = 'nodejs';
@@ -12,6 +12,8 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
   try {
     const { fileId } = await ctx.params;
     const drive = await getDriveClient();
+    const acumenFolderIds = (await ensureAcumenFolders(drive)).map((folder) => folder.id);
+    await assertFileInAcumen(drive, fileId, acumenFolderIds);
     const result = await drive.files.get({
       fileId,
       fields: DEFAULT_FILE_FIELDS,
@@ -34,6 +36,8 @@ export async function PUT(req: NextRequest, ctx: RouteContext) {
       );
     }
     const drive = await getDriveClient();
+    const acumenFolderIds = (await ensureAcumenFolders(drive)).map((folder) => folder.id);
+    await assertFileInAcumen(drive, fileId, acumenFolderIds);
     const name = nonEmpty(form.get('name')?.toString() ?? null);
     const mimeType = file.type || 'application/octet-stream';
 
