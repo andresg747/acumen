@@ -66,7 +66,9 @@ export default function Onboarding({ onError, error }: OnboardingProps) {
         </div>
 
         <div>
-          <h2 className="aside-headline">Atiende a tus clientes por WhatsApp, sin complicaciones</h2>
+          <h2 className="aside-headline">
+            Acompaña a tu comunidad por WhatsApp, sin complicaciones
+          </h2>
           <ul className="aside-points">
             <li>
               <span className="tick" aria-hidden="true">
@@ -84,12 +86,14 @@ export default function Onboarding({ onError, error }: OnboardingProps) {
               <span className="tick" aria-hidden="true">
                 <CheckGlyph />
               </span>
-              Responde a tus clientes desde un solo lugar.
+              Atiende a las personas de tu organización desde un solo lugar.
             </li>
           </ul>
         </div>
 
-        <p className="aside-foot">Más de 5.000 negocios ya conversan mejor con Acumen.</p>
+        <p className="aside-foot">
+          Organizaciones sociales de toda la región ya acompañan mejor a su comunidad con Acumen.
+        </p>
       </aside>
 
       <main className="auth-main">
@@ -104,7 +108,7 @@ export default function Onboarding({ onError, error }: OnboardingProps) {
           <div>
             <h1 className="auth-title">Te damos la bienvenida</h1>
             <p className="auth-sub">
-              Inicia sesión o crea tu cuenta para conectar WhatsApp con tu negocio.
+              Inicia sesión o crea tu cuenta para conectar WhatsApp con tu organización.
             </p>
           </div>
 
@@ -115,7 +119,7 @@ export default function Onboarding({ onError, error }: OnboardingProps) {
               </div>
             )}
             <button
-              className="block"
+              className="secondary block"
               onClick={() => handleGoogle('login')}
               disabled={loading !== null}
             >
@@ -126,18 +130,17 @@ export default function Onboarding({ onError, error }: OnboardingProps) {
             <div className="divider">o</div>
 
             <button
-              className="secondary block"
+              className="block"
               onClick={() => handleGoogle('register')}
               disabled={loading !== null}
             >
-              <GoogleIcon />
-              {loading === 'register' ? 'Conectando…' : 'Crear una cuenta con Google'}
+              {loading === 'register' ? 'Creando tu cuenta…' : 'Crear una cuenta'}
             </button>
           </div>
 
           <p className="help-note">
-            Usamos tu cuenta de Google para que no tengas que recordar otra contraseña. Es rápido y
-            seguro.
+            Crear tu cuenta es gratis y solo te toma un momento. También puedes entrar con Google si
+            prefieres no recordar otra contraseña.
           </p>
         </div>
       </main>

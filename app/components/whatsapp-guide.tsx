@@ -16,7 +16,7 @@ const STEPS: Step[] = [
   {
     title: 'Ten a mano tu teléfono con WhatsApp',
     description:
-      'Asegúrate de tener instalado WhatsApp en el teléfono donde recibes los mensajes de tu negocio. Si usas WhatsApp Business, ¡mejor aún!',
+      'Asegúrate de tener instalado WhatsApp en el teléfono donde recibes los mensajes de tu organización. Si usas WhatsApp Business, ¡mejor aún!',
     tip: 'Si todavía no tienes WhatsApp Business, puedes descargarlo gratis desde la tienda de aplicaciones.',
   },
   {
@@ -31,15 +31,15 @@ const STEPS: Step[] = [
     tip: 'El código es único y privado. Nunca lo compartas con nadie más.',
   },
   {
-    title: 'Confirma el nombre de tu negocio',
+    title: 'Confirma el nombre de tu organización',
     description:
-      'Escribe el nombre con el que tus clientes te conocen. Así sabrán que están hablando con tu negocio cuando les respondas.',
+      'Escribe el nombre con el que conocen a tu organización. Así las personas sabrán que están hablando contigo cuando les respondas.',
   },
   {
     title: '¡Envía tu primer mensaje de prueba!',
     description:
       'Te enviaremos un mensaje de bienvenida a tu propio WhatsApp para que veas que todo funciona. Si lo recibes, ¡ya está todo listo!',
-    tip: 'A partir de aquí, todos los mensajes de tus clientes llegarán a Acumen automáticamente.',
+    tip: 'A partir de aquí, todos los mensajes de las personas que acompañas llegarán a Acumen automáticamente.',
   },
 ];
 
@@ -69,10 +69,10 @@ export default function WhatsAppGuide({ onLogout }: WhatsAppGuideProps) {
       </header>
 
       <section className="hero">
-        <h1>Conecta WhatsApp con tu negocio</h1>
+        <h1>Conecta WhatsApp con tu organización</h1>
         <p>
-          Sigue estos pasos sencillos para empezar a atender a tus clientes por WhatsApp. Marca cada
-          paso cuando lo termines; nosotros te acompañamos en todo momento.
+          Sigue estos pasos sencillos para empezar a acompañar a tu comunidad por WhatsApp. Marca
+          cada paso cuando lo termines; nosotros te acompañamos en todo momento.
         </p>
 
         <div className="progress" aria-live="polite">
@@ -120,7 +120,7 @@ export default function WhatsAppGuide({ onLogout }: WhatsAppGuideProps) {
       <footer className="guide-footer">
         {allDone ? (
           <p className="muted">
-            Todo listo. Tu WhatsApp ya está conectado y puedes empezar a responder a tus clientes.
+            Todo listo. Tu WhatsApp ya está conectado y puedes empezar a acompañar a tu comunidad.
           </p>
         ) : (
           <p className="muted">
